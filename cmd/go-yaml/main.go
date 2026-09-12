@@ -352,6 +352,7 @@ func main() {
 
 	// Shared flags
 	longMode := flag.Bool("l", false, "Long (block) formatted output")
+	fromStage := flag.String("f", "", "Force input stage: t, e, n, or y")
 
 	// Config file flag
 	configFile := flag.String("C", "", "Load options from YAML config file")
@@ -380,6 +381,7 @@ func main() {
 	flag.BoolVar(nodeMode, "node", false, "Node representation output")
 	flag.BoolVar(nodeProfuseMode, "NODE", false, "Node with tag and style for all scalars")
 	flag.BoolVar(longMode, "long", false, "Long (block) formatted output")
+	flag.StringVar(fromStage, "from", "", "Force input stage: token, event, node, or yaml")
 	flag.StringVar(configFile, "config", "", "Load options from YAML config file")
 
 	// API selection flags (long form only)
@@ -407,6 +409,7 @@ func main() {
 	}
 
 	flag.Parse()
+	compact := !*longMode // compact is default, long mode negates it
 
 	// Validate flag combinations
 
@@ -481,28 +484,59 @@ func main() {
 		os.Exit(1)
 	}
 
+	inputData, err := io.ReadAll(input)
+	if err != nil {
+		log.Fatal("Failed to read input:", err)
+	}
+	structured, err := detectStructuredInput(inputData, *fromStage)
+	if err != nil {
+		log.Fatal("Failed to read input stage:", err)
+	}
+	if structured.stage != stageYAML {
+		var target stageKind
+		var profuse bool
+		switch {
+		case *tokenMode, *tokenProfuseMode:
+			target, profuse = stageToken, *tokenProfuseMode
+		case *eventMode, *eventProfuseMode:
+			target, profuse = stageEvent, *eventProfuseMode
+		case *nodeMode, *nodeProfuseMode:
+			target, profuse = stageNode, *nodeProfuseMode
+		case *yamlMode, *yamlPreserveMode:
+			target = stageYAML
+		case *jsonMode, *jsonPrettyMode:
+			log.Fatal("JSON output is only supported for YAML text input")
+		case *longMode:
+			target = stageNode
+		default:
+			log.Fatal("No output stage specified")
+		}
+		if err := processStructuredInput(structured, target, profuse,
+			compact, *yamlPreserveMode, opts); err != nil {
+			log.Fatal("Failed to process structured input:", err)
+		}
+		return
+	}
+	input = bytes.NewReader(inputData)
+
 	// Process YAML input
 	if *eventMode {
 		// Use event formatting mode (compact by default)
-		compact := !*longMode // compact is default, long mode negates it
 		if err := ProcessEvents(input, false, compact, unmarshalMode); err != nil {
 			log.Fatal("Failed to process events:", err)
 		}
 	} else if *eventProfuseMode {
 		// Use event formatting mode with profuse output
-		compact := !*longMode // compact is default, long mode negates it
 		if err := ProcessEvents(input, true, compact, unmarshalMode); err != nil {
 			log.Fatal("Failed to process events:", err)
 		}
 	} else if *tokenMode {
 		// Use token formatting mode (compact by default)
-		compact := !*longMode // compact is default, long mode negates it
 		if err := ProcessTokens(input, false, compact, unmarshalMode); err != nil {
 			log.Fatal("Failed to process tokens:", err)
 		}
 	} else if *tokenProfuseMode {
 		// Use token formatting mode with profuse output
-		compact := !*longMode // compact is default, long mode negates it
 		if err := ProcessTokens(input, true, compact, unmarshalMode); err != nil {
 			log.Fatal("Failed to process tokens:", err)
 		}
@@ -672,6 +706,10 @@ The go-yaml API has three sets of functions for reading/writing YAML:
 
 Usage:
   go-yaml [options] [file]
+
+Input Options:
+  -f, --from STAGE  Force input stage when auto-detection is ambiguous
+                    Values: token (t), event (e), node (n), yaml (y)
 
 Output Mode Options:
   -y, --yaml       YAML encoding output
